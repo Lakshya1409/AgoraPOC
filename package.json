@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@react-native/new-app-screen": "0.80.0",
+    "@react-navigation/native": "^6.1.6",
+    "@react-navigation/stack": "^6.3.16",
     "agora-react-native-rtm": "^1.5.1",
     "agora-rn-uikit": "^5.0.2",
     "react": "19.1.0",
