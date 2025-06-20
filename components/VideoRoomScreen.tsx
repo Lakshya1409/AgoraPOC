@@ -441,7 +441,7 @@ function VideoRoomScreen({ user, channelName, onLeave }: VideoRoomScreenProps) {
   useEffect(() => {
     // Fetch token from backend
     fetch(
-      `http://10.0.2.2:3000/rtcToken?channelName=${encodeURIComponent(
+      `http://172.16.11.52:3000/rtcToken?channelName=${encodeURIComponent(
         channelName,
       )}&uid=${user.id}&role=publisher`,
     )
