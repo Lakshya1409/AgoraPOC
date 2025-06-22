@@ -8,9 +8,9 @@ import {
   Dimensions,
   StyleSheet,
   StatusBar,
+  Animated,
   Platform,
   ScrollView,
-  FlatList,
 } from 'react-native';
 import {
   ClientRoleType,
@@ -38,6 +38,7 @@ const VideoRoomScreen = ({
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [showParticipants, setShowParticipants] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [showControls, setShowControls] = useState(true);
   const [maximizedUid, setMaximizedUid] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState<
@@ -45,6 +46,8 @@ const VideoRoomScreen = ({
   >(null);
 
   const agoraEngineRef = useRef<any>(null);
+  const controlsOpacity = useRef(new Animated.Value(1)).current;
+  const controlsTimer = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const setup = async () => {
@@ -88,6 +91,9 @@ const VideoRoomScreen = ({
     setup();
 
     return () => {
+      if (controlsTimer.current) {
+        clearTimeout(controlsTimer.current);
+      }
       agoraEngineRef.current?.release && agoraEngineRef.current.release();
     };
   }, []);
@@ -120,6 +126,42 @@ const VideoRoomScreen = ({
       join();
     }
   }, [isEngineReady, isJoined, join]);
+
+  const hideControls = useCallback(() => {
+    Animated.timing(controlsOpacity, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start(() => setShowControls(false));
+  }, [controlsOpacity]);
+
+  // Auto-hide controls after 3 seconds
+  useEffect(() => {
+    if (showControls) {
+      if (controlsTimer.current) {
+        clearTimeout(controlsTimer.current);
+      }
+      controlsTimer.current = setTimeout(() => {
+        hideControls();
+      }, 3000);
+    }
+    return () => {
+      if (controlsTimer.current) {
+        clearTimeout(controlsTimer.current);
+      }
+    };
+  }, [showControls, hideControls]);
+
+  const showControlsTemp = () => {
+    if (!showControls) {
+      setShowControls(true);
+      Animated.timing(controlsOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    }
+  };
 
   const leave = async () => {
     if (!isJoined || !agoraEngineRef.current) return;
@@ -213,20 +255,19 @@ const VideoRoomScreen = ({
 
   const allVideoUids = [0, ...remoteUids];
   const { width, height } = Dimensions.get('window');
+
+  // Calculate pages for navigation (4 users per page)
   const usersPerPage = 4;
   const totalPages = Math.ceil(allVideoUids.length / usersPerPage);
+  const startIndex = currentPage * usersPerPage;
+  const endIndex = Math.min(startIndex + usersPerPage, allVideoUids.length);
+  const currentPageUsers = allVideoUids.slice(startIndex, endIndex);
 
-  // Split UIDs into pages of 4
-  const pagedUids: number[][] = [];
-  for (let i = 0; i < allVideoUids.length; i += usersPerPage) {
-    pagedUids.push(allVideoUids.slice(i, i + usersPerPage));
-  }
-
-  // --- Layout Config ---
+  // Dynamic layout calculation
   const getLayoutConfig = (userCount: number) => {
-    // Add top margin to avoid overlap with top bar
-    const availableHeight = height - 200 - 32; // 32px top margin
-    const availableWidth = width - 20;
+    const availableHeight = height - 200; // Account for controls
+    const availableWidth = width - 20; // Account for padding
+
     switch (userCount) {
       case 1:
         return {
@@ -245,6 +286,13 @@ const VideoRoomScreen = ({
           gap: 10,
         };
       case 3:
+        return {
+          columns: 2,
+          rows: 2,
+          width: (availableWidth - 10) / 2,
+          height: (availableHeight - 10) / 2,
+          gap: 10,
+        };
       case 4:
         return {
           columns: 2,
@@ -264,131 +312,32 @@ const VideoRoomScreen = ({
     }
   };
 
-  // --- Render Video Tiles for a Page ---
-  const renderVideoPage = ({ item: uids }: { item: number[] }) => {
-    const layoutConfig = getLayoutConfig(uids.length);
-    return (
-      <View style={styles.videoGridPage}>
-        {uids.map((uid, index) => {
-          const isSpecialLayout = uids.length === 3 && index === 2;
-          const videoStyle =
-            layoutConfig.columns === 1
-              ? {
-                  width: layoutConfig.width,
-                  height: layoutConfig.height,
-                  marginBottom: index < uids.length - 1 ? layoutConfig.gap : 0,
-                }
-              : {
-                  width: layoutConfig.width,
-                  height: layoutConfig.height,
-                  marginRight: index % 2 === 0 ? layoutConfig.gap : 0,
-                  marginBottom: index < uids.length - 2 ? layoutConfig.gap : 0,
-                };
-          return (
-            <View
-              key={uid}
-              style={[
-                styles.videoTile,
-                videoStyle,
-                uid === 0 ? styles.localVideoTile : styles.remoteVideoTile,
-                isSpecialLayout && styles.centerVideoTile,
-              ]}
-            >
-              {isEngineReady && (
-                <RtcSurfaceView
-                  style={styles.videoView}
-                  canvas={{
-                    uid,
-                    sourceType:
-                      uid === 0 && isScreenSharing
-                        ? VideoSourceType.VideoSourceScreen
-                        : VideoSourceType.VideoSourceCamera,
-                  }}
-                />
-              )}
-              {/* Overlay */}
-              <View style={styles.videoOverlay}>
-                <View style={styles.videoTopSection}>
-                  <View style={styles.nameTag}>
-                    <Text style={styles.nameText}>
-                      {uid === 0 ? 'You' : `User ${uid}`}
-                      {uid === 0 && isScreenSharing && ' 🖥️'}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.maximizeButton}
-                    onPress={() => toggleMaximize(uid)}
-                  >
-                    <Text style={styles.maximizeIcon}>⛶</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.videoBottomSection}>
-                  {uid === 0 && (
-                    <View style={styles.statusIcons}>
-                      <View
-                        style={[
-                          styles.statusIcon,
-                          {
-                            backgroundColor: isMicEnabled
-                              ? 'rgba(0, 0, 0, 0.6)'
-                              : 'rgba(220, 53, 69, 0.9)',
-                          },
-                        ]}
-                      >
-                        <Text style={styles.iconText}>
-                          {isMicEnabled ? '🎤' : '🔇'}
-                        </Text>
-                      </View>
-                      {!isScreenSharing && (
-                        <View
-                          style={[
-                            styles.statusIcon,
-                            {
-                              backgroundColor: isCameraEnabled
-                                ? 'rgba(0, 0, 0, 0.6)'
-                                : 'rgba(220, 53, 69, 0.9)',
-                            },
-                          ]}
-                        >
-                          <Text style={styles.iconText}>
-                            {isCameraEnabled ? '📹' : '🚫'}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  )}
-                  <View style={styles.connectionQuality}>
-                    <View
-                      style={[
-                        styles.qualityDot,
-                        {
-                          backgroundColor:
-                            connectionStatus === 'good'
-                              ? '#34C759'
-                              : connectionStatus === 'poor'
-                              ? '#FF9500'
-                              : connectionStatus === 'lost'
-                              ? '#FF3B30'
-                              : '#8E8E93',
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-              </View>
-            </View>
-          );
-        })}
-      </View>
-    );
-  };
+  const layoutConfig = getLayoutConfig(currentPageUsers.length);
 
-  // --- FlatList Scroll Handler ---
-  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
-    if (viewableItems.length > 0) {
-      setCurrentPage(viewableItems[0].index);
+  const getVideoStyle = (index: number) => {
+    if (layoutConfig.columns === 1) {
+      return {
+        width: layoutConfig.width,
+        height: layoutConfig.height,
+        marginBottom:
+          index < currentPageUsers.length - 1 ? layoutConfig.gap : 0,
+      };
+    } else {
+      const isLastRowOdd =
+        currentPageUsers.length % 2 === 1 &&
+        index === currentPageUsers.length - 1;
+      return {
+        width:
+          isLastRowOdd && currentPageUsers.length === 3
+            ? layoutConfig.width
+            : layoutConfig.width,
+        height: layoutConfig.height,
+        marginRight: index % 2 === 0 ? layoutConfig.gap : 0,
+        marginBottom:
+          index < currentPageUsers.length - 2 ? layoutConfig.gap : 0,
+      };
     }
-  }).current;
+  };
 
   const participants = [
     {
@@ -447,8 +396,168 @@ const VideoRoomScreen = ({
         </View>
       )}
 
-      {/* Top Bar (fixed at the top, always visible) */}
-      <View style={styles.topBar}>
+      {/* Main Video Container */}
+      <TouchableOpacity
+        style={styles.videoContainer}
+        activeOpacity={1}
+        onPress={showControlsTemp}
+      >
+        <View style={styles.videoGrid}>
+          {currentPageUsers.map((uid, index) => {
+            const videoStyle = getVideoStyle(index);
+            const isSpecialLayout =
+              currentPageUsers.length === 3 && index === 2;
+
+            return (
+              <View
+                key={uid}
+                style={[
+                  styles.videoTile,
+                  videoStyle,
+                  uid === 0 ? styles.localVideoTile : styles.remoteVideoTile,
+                  isSpecialLayout && styles.centerVideoTile,
+                ]}
+              >
+                {isEngineReady && (
+                  <RtcSurfaceView
+                    style={styles.videoView}
+                    canvas={{
+                      uid,
+                      sourceType:
+                        uid === 0 && isScreenSharing
+                          ? VideoSourceType.VideoSourceScreen
+                          : VideoSourceType.VideoSourceCamera,
+                    }}
+                  />
+                )}
+
+                {/* Video Controls Overlay */}
+                <View style={styles.videoOverlay}>
+                  {/* Top Section - Name and Maximize */}
+                  <View style={styles.videoTopSection}>
+                    <View style={styles.nameTag}>
+                      <Text style={styles.nameText}>
+                        {uid === 0 ? 'You' : `User ${uid}`}
+                        {uid === 0 && isScreenSharing && ' 🖥️'}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.maximizeButton}
+                      onPress={() => toggleMaximize(uid)}
+                    >
+                      <Text style={styles.maximizeIcon}>⛶</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Bottom Section - Status Icons */}
+                  <View style={styles.videoBottomSection}>
+                    {uid === 0 && (
+                      <View style={styles.statusIcons}>
+                        <View
+                          style={[
+                            styles.statusIcon,
+                            {
+                              backgroundColor: isMicEnabled
+                                ? 'rgba(0, 0, 0, 0.6)'
+                                : 'rgba(220, 53, 69, 0.9)',
+                            },
+                          ]}
+                        >
+                          <Text style={styles.iconText}>
+                            {isMicEnabled ? '🎤' : '🔇'}
+                          </Text>
+                        </View>
+                        {!isScreenSharing && (
+                          <View
+                            style={[
+                              styles.statusIcon,
+                              {
+                                backgroundColor: isCameraEnabled
+                                  ? 'rgba(0, 0, 0, 0.6)'
+                                  : 'rgba(220, 53, 69, 0.9)',
+                              },
+                            ]}
+                          >
+                            <Text style={styles.iconText}>
+                              {isCameraEnabled ? '📹' : '🚫'}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {/* Connection Quality Indicator */}
+                    <View style={styles.connectionQuality}>
+                      <View
+                        style={[
+                          styles.qualityDot,
+                          {
+                            backgroundColor:
+                              connectionStatus === 'good'
+                                ? '#34C759'
+                                : connectionStatus === 'poor'
+                                ? '#FF9500'
+                                : connectionStatus === 'lost'
+                                ? '#FF3B30'
+                                : '#8E8E93',
+                          },
+                        ]}
+                      />
+                    </View>
+                  </View>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      </TouchableOpacity>
+
+      {/* Page Navigation */}
+      {totalPages > 1 && (
+        <Animated.View
+          style={[styles.pageNavigation, { opacity: controlsOpacity }]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.navButton,
+              currentPage === 0 && styles.navButtonDisabled,
+            ]}
+            onPress={() => setCurrentPage(Math.max(0, currentPage - 1))}
+            disabled={currentPage === 0}
+          >
+            <Text style={styles.navButtonText}>‹</Text>
+          </TouchableOpacity>
+
+          <View style={styles.pageIndicator}>
+            {Array.from({ length: totalPages }, (_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.pageDot,
+                  i === currentPage && styles.pageDotActive,
+                ]}
+              />
+            ))}
+          </View>
+
+          <TouchableOpacity
+            style={[
+              styles.navButton,
+              currentPage === totalPages - 1 && styles.navButtonDisabled,
+            ]}
+            onPress={() =>
+              setCurrentPage(Math.min(totalPages - 1, currentPage + 1))
+            }
+            disabled={currentPage === totalPages - 1}
+          >
+            <Text style={styles.navButtonText}>›</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      {/* Top Bar */}
+      <Animated.View style={[styles.topBar, { opacity: controlsOpacity }]}>
         <View style={styles.meetingInfo}>
           <Text style={styles.meetingTitle}>{channelName}</Text>
           <View style={styles.connectionIndicator}>
@@ -483,47 +592,12 @@ const VideoRoomScreen = ({
           <Text style={styles.participantsCount}>{participants.length}</Text>
           <Text style={styles.participantsIcon}>👥</Text>
         </TouchableOpacity>
-      </View>
-
-      {/* Main Video Container with swipeable pages */}
-      <View style={styles.videoContainerWithMargin}>
-        <FlatList
-          data={pagedUids}
-          renderItem={renderVideoPage}
-          keyExtractor={(_, idx) => `page-${idx}`}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-          initialScrollIndex={currentPage}
-          getItemLayout={(_, index) => ({
-            length: width,
-            offset: width * index,
-            index,
-          })}
-        />
-      </View>
-
-      {/* Page Indicator (dots) */}
-      {totalPages > 1 && (
-        <View style={styles.pageNavigation}>
-          <View style={styles.pageIndicator}>
-            {Array.from({ length: totalPages }, (_, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.pageDot,
-                  i === currentPage && styles.pageDotActive,
-                ]}
-              />
-            ))}
-          </View>
-        </View>
-      )}
+      </Animated.View>
 
       {/* Bottom Controls */}
-      <View style={styles.bottomControls}>
+      <Animated.View
+        style={[styles.bottomControls, { opacity: controlsOpacity }]}
+      >
         <View style={styles.controlsRow}>
           <TouchableOpacity
             style={[
@@ -534,6 +608,7 @@ const VideoRoomScreen = ({
           >
             <Text style={styles.controlIcon}>{isMicEnabled ? '🎤' : '🔇'}</Text>
           </TouchableOpacity>
+
           <TouchableOpacity
             style={[
               styles.controlButton,
@@ -547,6 +622,7 @@ const VideoRoomScreen = ({
               {isCameraEnabled && !isScreenSharing ? '📹' : '🚫'}
             </Text>
           </TouchableOpacity>
+
           <TouchableOpacity
             style={[
               styles.controlButton,
@@ -556,6 +632,7 @@ const VideoRoomScreen = ({
           >
             <Text style={styles.controlIcon}>🖥️</Text>
           </TouchableOpacity>
+
           <TouchableOpacity
             style={[
               styles.controlButton,
@@ -566,6 +643,7 @@ const VideoRoomScreen = ({
           >
             <Text style={styles.controlIcon}>🔄</Text>
           </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.controlButton, styles.endCallButton]}
             onPress={leave}
@@ -573,7 +651,7 @@ const VideoRoomScreen = ({
             <Text style={styles.controlIcon}>📞</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </Animated.View>
 
       {/* Participants Modal */}
       {showParticipants && (
@@ -650,19 +728,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0a0a0a',
   },
-  videoContainerWithMargin: {
-    marginTop: 100,
-    marginBottom: 0,
-    paddingBottom: 100,
+  videoContainer: {
+    flex: 1,
+    padding: 10,
   },
-  videoGridPage: {
+  videoGrid: {
     flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     alignItems: 'center',
-    width: Dimensions.get('window').width,
-    height: '100%',
   },
   videoTile: {
     backgroundColor: '#1c1c1e',
@@ -757,6 +832,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     gap: 20,
+  },
+  navButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navButtonDisabled: {
+    opacity: 0.3,
+  },
+  navButtonText: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: 'bold',
   },
   pageIndicator: {
     flexDirection: 'row',
